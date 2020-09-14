@@ -1,0 +1,774 @@
+---
+title: "MovieLens Capstone Project"
+author: "John Sowers"
+date: "9/14/2020"
+output:
+  pdf_document: default
+---
+```{r Packages Installed / Libraries Loaded, include=FALSE}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org", quiet=TRUE)
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org", quiet=TRUE)
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org", quiet=TRUE)
+if(!require(stringi)) install.packages("stringi", repos = "http://cran.us.r-project.org", quiet=TRUE)
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org", quiet=TRUE)
+if(!require(gridExtra)) install.packages("gridExtra", repos = "http://cran.us.r-project.org", quiet=TRUE)
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org", quiet=TRUE)
+if(!require(rmarkdown)) install.packages("rmarkdown", repos = "http://cran.us.r-project.org", quiet=TRUE)
+if(!require(knitr)) install.packages("knitr", repos = "http://cran.us.r-project.org", quiet=TRUE)
+if(!require(devtools)) install.packages("devtools", repos = "http://cran.us.r-project.org", quiet=TRUE)
+if(!require(tinytex)) install.packages("latexpdf", repos = "http://cran.us.r-project.org", quiet=TRUE)
+if(!require(tinytex)) install.packages("tinytex", repos = "http://cran.us.r-project.org", quiet=TRUE)
+if(!require(packrat)) install.packages("packrat", repos = "http://cran.us.r-project.org", quiet=TRUE)
+if(!require(rsconnect)) install.packages("rsconnect", repos = "http://cran.us.r-project.org", quiet=TRUE)
+library(tidyverse)
+library(lubridate)
+library(caret)
+library(stringi)
+library(data.table)
+library(gridExtra)
+library(ggplot2)
+library(rmarkdown)
+library(knitr)
+library(devtools)
+library(latexpdf)
+library(tinytex)
+library(packrat)
+library(rsconnect)
+```
+```{r Reset all Variables, include=FALSE}
+rm(list=ls())  # Clears all variables
+``` 
+```{r Options Set, include=FALSE}
+theme_set(theme_bw(base_size=11))
+options(digits=5) 
+```
+```{r Edx / Validation Data Sets Creation, include=FALSE}
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile() 
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl, quiet=TRUE)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+set.seed(1)
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+**INTRODUCTION**\  
+` `  
+` `  
+This project report is submitted to fulfill part of the requirement for the Edx Data Science: Capstone Course, utilizing the Movielens data set downloaded from the GroupLens website at <http://files.grouplens.org/datasets/movielens/ml-10m.zip>.  The program code for this project was compiled utilizing R version 4.02 / R Studio version 1.3.1073.  It was run on a Dell m15 R3 laptop computer with an i7 Central Processing Unit (CPU) with 16 Gigabytes of Random Access Memory (RAM) utilizing Microsoft Windows 10.\      
+` `
+` `  
+The basis of this project is taken from the 2006 Netflix challenge in attempts to increase its movie rating prediction accuracy, using the Residual Mean Square Error (RMSE) value to evaluate the results.  This original data set was broken into 3 data sets:  (1) the training data consisting of 100,480,507 reviews; (2) the quiz data consisting of 1,408,342 reviews; and (3) the test data consisting of 1,408,789 reviews.\       
+` `  
+In this project, the smaller Movielens data set is also separated into 3 distinct data sets:  (1) the training data consisting of 8,100,054 reviews; (2) the test data consisting of 900,007 reviews; and (3) the validation data consisting of 999,993 reviews.  The training and test sets are utilized to analyze, create, and tune the models with the validation data reserved to evaluate the final tuned model.  The structure of the combined training and test data is shown below.\          
+` `  
+```{r Training & Test Data Sets Creation, include=FALSE}
+edx_genres <- edx %>% separate_rows(genres,sep="\\|")  # Combined Training / Test Data Set by distinct genres - analysis only
+
+set.seed(1)
+test_index <- createDataPartition(y = edx$rating, times = 1, p = 0.1, list = FALSE)
+training <- edx[-test_index,]  # Create Training Data Set
+test <- edx[test_index,] # Create Test Data Set
+```
+```{r Edx Data Set Structure, fontsize=10, echo=FALSE}
+str(edx) # Shows structure of the combined Training/Test Data Set
+```
+` `  
+Analysis of the combined training and test data set reveals that submitted reviews cover 10,677 unique movies in 20 distinct genres that were released over a 94-year period by 69,878 separate users during a course of 15 years.\    
+` `  
+```{r Edx Data Set Variables, include=FALSE}
+data.frame(
+  ratings = n_distinct(edx$rating),
+  movies = n_distinct(edx$movieId),
+  users = n_distinct(edx$userId),
+  genres = n_distinct(edx_genres$genres),
+  released = n_distinct(data.frame(table(as.numeric(stri_sub(edx$title,-5,-2))))),
+  reviewed= n_distinct(year(as_datetime(edx$timestamp))))
+```
+` ` 
+**METHODS / ANALYSIS**\    
+` `  
+As with the original Netflix challenge, the RMSE is used again to evaluate the results in this project.  The RMSE evaluation method is chosen due to its ability to manage large databases with multiple predictors.  The RMSE equation is shown below.\  
+` `  
+` `   
+$RMSE = \sqrt{\sum_{i=1}^n(\hat{y} - y)^2/n}$\    
+` `  
+In this equation, the variable $n$ denotes the total number of reviews, $\hat{y}$ denotes the movie's true rating, and $y$ denotes the movie's predicted rating that the model returns.\  
+` `  
+```{r Vectors Initialization, include=FALSE}
+
+Models = c("Model 1",
+           "Model 2", "Model 2",
+           "Model 3", "Model 3",
+           "Model 4", "Model 4",
+           "Model 5", "Model 5")
+
+Predictors = c("mu", 
+          "mu+Movie", "mu+Movie+Reg", 
+          "mu+Movie+User", "mu+Movie+User+Reg", 
+          "mu+Movie+User+Genre", "mu+Movie+User+Genre+Reg", 
+          "mu+Movie+User+Genre+Time", "mu+Movie+User+Genre+Time+Reg")
+
+training_stats <- data.frame(Models = Models, Predictors=Predictors, Lambda=NA, RMSE=NA)
+validation_stats <- data.frame(Models = Models, Predictors=Predictors, Lambda=NA, RMSE=NA)
+
+Model_Rating <- function(l, true_rating, predicted_rating) {
+  RMSE = sqrt(mean((true_rating - predicted_rating)^2))
+  data.frame(Lambda = l, RMSE=RMSE)
+}
+```
+Unlike the original Netflix challenge with teams using a much large data set and many predictors to obtain low RMSE values, the scope of this paper uses a smaller number of reviews with only 6 parameters to to reduce the RMSE below 0.86490.  These parameters include:\   
+` `  
+```{r Edx Variable Names, fontsize=10, echo=FALSE}
+names(edx)
+``` 
+` `  
+From these 6 parameters, five predictors are identified for further analysis and model creation.  These models include:\  
+` `  
+` `  
+Model 1:   $Y = \mu + \epsilon$\     
+Model 2:   $Y_u = \mu + b_i + \epsilon_u$\     
+Model 3:   $Y_{i,u} = \mu + b_i + b_u + \epsilon_{i,u}$\     
+Model 4:   $Y_{u,u,g} = \mu + b_i +  b_u +  b_g + \epsilon_{i,u,g}$\    
+Model 5:   $Y_{i,u,g,t} = \mu +  b_i + b_u +  b_g +  b_t + \epsilon_{i,u,g,t}$\     
+` `  
+With the exception of Model 1 that uses the overall average as the sole basis for its prediction, these models benefit from regularization with a variable $\lambda$  introduced into the models.  This helps reduce, but not eliminate, the effects of outliers on the RMSE values and prevent overfitting.  These models require further tuning to find the optimal $\lambda$s that minimize the RMSE values based on the test data.  These tuned models are ran against the validation data to determine each model's actual performance.\  
+` `  
+` `  
+**Model 1** ($\mu$)\ 
+` `  
+` `  
+The first model utilizes the overall mean of the movie ratings as the sole predictor.  Analyzing the data, the mean of the overall ratings is 3.5124 and the median is 4.0; and this can be seen with 16% of the ratings falling between 0 and 3 and 74% of the ratings ranging between 3 and 5.  Additionally, 80% of the ratings comprised of whole numbers and 20% comprised of non-whole numbers.  This initial analysis is shown in the below figure.\   
+```{r Model 1 Distribution Fig, fig.align='center', fig.width=5, fig.height=3, echo=FALSE}
+ratings_fig <- as.data.frame(table(edx$rating)) %>% 
+  mutate(Var1=as.character(Var1)) %>% 
+  ggplot(aes(Var1, Freq, color="black")) + 
+  geom_bar(stat="identity", show.legend=FALSE) +
+  annotate("text", x = 4.95, y = 2500000, label = "Overall Mean = 3.5125") +
+  geom_vline(xintercept=2*mean(edx$rating), size=1.0, color="red") +
+  scale_y_continuous(name="Ratings Count", labels = scales::comma) +
+  ggtitle("Overall Ratings Distribution") +
+  xlab("Movie Ratings") +
+  ylab("Reviews Count") 
+
+ratings_fig
+```
+` `  
+` `  
+` `  
+Based on these observations, a first simple model is constructed, as depicted in the equation:\    
+` `  
+$Y = \mu + \epsilon$\    
+` `  
+In this equation, the variable $Y$ denotes the model's predicted rating, $\mu$ denotes the total overall mean, and $\epsilon$ denotes the residual error.  No tuning of the model is required for this basic model.  Utilizing the test data results in the following output.\  
+` `  
+` `  
+```{r Model 1 Training/Test Run, fontsize=10, echo=FALSE}
+mu <- mean(training$rating)  # Simple Average of Training Data Set
+
+training_stats[1,3:4] <- Model_Rating(0, test$rating, mu)[,1:2]
+training_stats[1,]
+```
+` `  
+While the result of Model 1 is far from the goal set by this project, it provides a basis to compare future models.\ 
+` `  
+` `  
+**Model 2**  ($\mu$ + Movie Effects)\    
+` `  
+Model 2 adds movie effects to that of $\mu$, as described in Model 1.\        
+` `  
+The number of movie reviews submitted for movies range from a low of 1 to a high of 31,336.  Likewise, ratings range from a minimum score of  0.5 and a maximum of 5.0 with the mean rating of distinct movies at 3.1921.  This mean movie rating is lower than the mean of the overall ratings of 3.5125.  Movie reviews and ratings distribution are depicted in the following figures.\       
+```{r Model 2 Initial Analysis, fig.align='center', fig.width=7, fig.height=4, echo=FALSE}
+movie_review_distro_fig <- edx %>% 
+  group_by(movieId) %>%
+  summarise(n=length(rating), .groups = 'drop') %>%
+  ggplot(aes(n, color="black")) +
+  scale_x_log10() +
+  geom_histogram(bins=30, show.legend=FALSE) +
+  ggtitle("Movie Reviews Distribution") +
+  xlab("Number Reviews by Movie (log10)") +
+  ylab("Movie Count") 
+
+movie_rating_distro <- edx %>% group_by(movieId) %>% 
+  summarise(rev=length(rating), rat=mean(rating), .groups="drop") %>% 
+  ggplot(aes(rev,rat)) + 
+  geom_smooth(method='gam', formula = y ~ s(x, bs = "cs")) +
+  geom_point() +
+  annotate("text", x = 27050, y = 3.09, label = "Mean = 3.1921") +
+  geom_hline(yintercept=3.1921, size=1.0, color="red") +
+  ggtitle("Movie Reviews vs Ratings") +
+  xlab("Number of Reviews by Movie") +
+  ylab("Average Movie Ratings") 
+
+grid.arrange(movie_review_distro_fig, movie_rating_distro, ncol=2) 
+```
+Outliers exist from movies that have few ratings, negatively impacting the RMSE calculations.  Such outliers can be seen by inspecting the number of reviews of the highest and lowest rated movies as seen in the following tables:\    
+` `  
+` `  
+` `  
+` `  
+```{r Model 2 Movie Stats Analysis, echo=FALSE}
+movie_stats <- edx %>% 
+  group_by(movieId) %>% 
+  summarise(num_reviews = length(rating), avg_rating=mean(rating), .groups = 'drop') %>% 
+  left_join(.,data.frame(movieId=edx$movieId, title=edx$title), by="movieId") %>%   
+  unique.data.frame() %>%
+  arrange(desc(avg_rating)) 
+```
+```{r Model 2  Movie Stats Analysis Table1, fontsize=10, echo=FALSE}
+movie_stats %>% head(5)
+```
+` `  
+```{r Model 2 Movie Stats Analysis Table2, echo=FALSE}
+movie_stats %>% tail(5)
+```
+` `  
+Based on these observations, a model is constructed, expanding on Model 1 that introduces the variable $b_i$.  This new variable accounts for movie effects while $\lambda$\ reduces, but not eliminates, the impact of the outliers by movies with few reviews.  This equation is written as follows:\   
+` `  
+$Y_i = \mu + \lambda_i b_i + \epsilon_i$\    
+` `    
+This model returns the following outputs when it is ran against the test data with the first result depicting the model without regularization (i.e. $\lambda$ = 0) and the second result depicting the model results with regularization (i.e. $\lambda$ set to that of its best tuned value).\   
+` `  
+```{r Model 2 Creation, include=FALSE}
+model2 <- function(l, test_or_valid) {
+  
+  movie_avgs <- training %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n() + l), .groups = 'drop')
+  
+  predicted_rating2 <- test_or_valid %>%
+    left_join(movie_avgs, by='movieId') %>%
+    mutate(pred=ifelse(!is.na(b_i), mu + b_i, mu)) %>%
+    .$pred
+  
+  Model_Rating(l, test_or_valid$rating, predicted_rating2)
+}
+```
+```{r Model 2 Training/Testing, echo=FALSE}
+lambda_untuned2 <- seq(0, 6, 0.25)   
+
+training_model2 <- sapply(lambda_untuned2, model2, test)
+
+lambda_tuned2 <- lambda_untuned2[which.min(training_model2[2,])]
+
+training_stats[2,3:4] <- sapply(0, model2, test)
+training_stats[3,3:4] <- sapply(lambda_tuned2, model2, test)
+training_stats[2:3,]
+```
+` `  
+Comparing the unregularized result with that of the Model 1 result shows that this model provides a RMSE reduction of 0.11634 below that of the result from Model 1.  Additionally, Model 2's regularized result reduces the outlier effects by an additional 0.00005.\         
+` `  
+` ` 
+**Model 3** ($\mu$ + Movie + User Effects)\    
+` `   
+Model 3 adds user effects to that of the $\mu$ and movie effects that were described in Model 2.\     
+` `  
+Reviews from distinct users range from a low of 13 to a high of 6,637.  Likewise mean user ratings range from a minimum of 0.5 to a maximum of 5.0 with the mean average user rating of 3.6137. This mean user rating is higher than the mean of the overall ratings of 3.5125.  User reviews and ratings' distribution are depicted in the following figures.\       
+```{r Model 3 Initial Analysis, fig.align='center', fig.width=7, fig.height=4, echo=FALSE}
+user_review_distro_fig <- edx %>% 
+  group_by(userId) %>%
+  summarise(n=length(rating), .groups = 'drop') %>%
+  ggplot(aes(n, color="black")) +
+  geom_histogram(bins=30, show.legend=FALSE) +
+  scale_x_log10() +
+  ggtitle("User Reviews Distribution") +
+  xlab("Number of Reviews by User (log10)") +
+  ylab("User Count") 
+
+user_rating_distro <- edx %>% group_by(userId) %>% 
+  summarise(rev=length(rating), rat=mean(rating), .groups="drop") %>% 
+  ggplot(aes(rev,rat)) + 
+  geom_point() +
+  geom_smooth(method='gam', formula = y ~ s(x, bs = "cs")) +
+  annotate("text", x = 5650, y = 3.80, label = "Mean = 3.6137") +
+  geom_hline(yintercept=3.6137, size=1.0, color="red") +
+  ggtitle("User Reviews vs Ratings") +
+  xlab("Number of Reviews by User") +
+  ylab("Average User Ratings") 
+
+grid.arrange(user_review_distro_fig, user_rating_distro, ncol=2)
+``` 
+Based on these observations, a model is constructed, expanding on Model 2 and introducing the variable $b_u$.  This new variable accounts for user effects while $\lambda$ is used to reduce the impact of the outliers by users with few reviews.  This equation is written as follows:\      
+` `  
+$Y_{i,u} = \mu + \lambda_{i,u} b_i + \lambda_{i,u} b_u + \epsilon_{i,u}$\    
+` `   
+This model returns the following outputs when it is ran against the test data with the first result depicting the model without regularization (i.e. $\lambda$ = 0) and the second result depicting the model with regularization (i.e. $\lambda$ set to that of its best tuned value).\   
+` `  
+```{r Model 3 Creation, include=FALSE}
+
+model3 <- function(l, test_or_valid) {
+  
+  movie_avgs <- training %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n() + l), 
+              .groups = 'drop')
+  
+  user_avgs <- training %>%
+    left_join(movie_avgs, by='movieId') %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - mu - b_i)/(n() + l), 
+              .groups = 'drop')
+  
+  predicted_rating <- test_or_valid %>%
+    left_join(movie_avgs, by='movieId') %>%
+    left_join(user_avgs, by='userId') %>%
+    mutate(pred=ifelse(!is.na(b_i + b_u), mu + b_i + b_u, mu)) %>%
+    .$pred
+  
+  Model_Rating(l, test_or_valid$rating, predicted_rating)
+}
+```
+```{r Model 3 Training / Testing, fontsize=10, echo=FALSE}
+
+lambda_untuned3 <- seq(0, 6, 0.25)  # Lambda Unknown/Not Tuned
+
+training_model3 <- sapply(lambda_untuned3, model3, test)
+
+lambda_tuned3 <- lambda_untuned3[which.min(training_model3[2,])]
+
+training_stats[4,3:4] <- sapply(0, model3, test)
+training_stats[5,3:4] <- sapply(lambda_tuned3, model3, test)
+training_stats[4:5,]
+```
+` `  
+Comparing the unregularized result Model 3 with that of Model 2 shows that there is a further RMSE reduction of 0.07799.  Additionally, Model 3's regularized result reduces the outlier effects by an additional .0006.  At this point, based on the test data from which the model was tuned, the RMSE is below that of the project goal of 0.8940; however, the final results are based on an independent validation data set, which will have higher RMSE values.  Further analysis and model creation is warranted to meet the project's objective.\        
+` `   
+**Model 4** ($\mu$ + Movie + User + Genre Effects)\    
+` `  
+Model 4 adds genre effects to that of the $\mu$, movie effects, and user effects that were described in Model 3.\     
+` `  
+Although there are 20 distinct genres in the Movielens data set, movies may fall under multiple genres with the data containing 797 genre combinations. Reviews from distinct genres range from the low of 13 to a high of 6,637.  Likewise the minimum mean genre rating is 1.47 with the maximum rating of 4.71.  The overall  genre mean rating is 3.5786 which is higher than the mean of the overall mean rating of 3.5125.  Genre reviews and ratings distribution are depicted in the following figures.\       
+```{r Model 4 Genre Effects, fig.align='center', fig.width=7, fig.height=4,echo=FALSE}
+
+genre_review_distro_fig <- edx_genres %>% 
+  group_by(genres) %>%
+  summarise(rating_count=length(rating), .groups = 'drop') %>% 
+  ggplot(aes(genres, rating_count)) + 
+  geom_bar(stat="identity", show.legend=FALSE) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  ggtitle("Review Distribution by Genre") +
+  xlab("Genres") +
+  scale_y_continuous(name="Number of Reviews", labels = scales::comma)  
+
+genre_rating_avg_fig <- edx_genres %>%  
+  group_by(genres) %>% 
+  summarise(mean_rating = mean(rating), .groups = 'drop') %>%
+  ggplot(aes(genres, mean_rating, color="black")) + 
+  geom_bar(stat="identity", show.legend=FALSE) +
+  annotate("text", x = 3.9, y = 3.74, label = "Mean = 3.5786") +
+  geom_hline(yintercept=3.5786, size=1.0, color="red") +
+  theme(axis.text.x = element_text(angle = 90)) +
+  ggtitle("Ratings Distribution by Genre") +
+  xlab("Genres") +
+  ylab("Average Rating") 
+
+grid.arrange(genre_review_distro_fig, genre_rating_avg_fig, ncol=2) 
+```
+Outliers exist from genres that have few ratings, which negatively impact a model's rating predictions.  Such outliers include the genres "Film-Noir" with 118,394 reviews on 148 movies with an average rating of 4.0117 as well as the genre "IMAX" with 8,190 reviews on 29 movies with an average rating of 3.7618.  Results of the top rated genres is shown in the following table.\  
+` `  
+` `  
+```{r Model 4 Genre Analysis, fontsize=10, echo=FALSE}
+genres_overview <- edx_genres %>% 
+   group_by(genres) %>% 
+   summarise(users=n_distinct(userId), movies=n_distinct(movieId), reviews = length(rating), ratings=mean(rating), 
+     .groups = 'drop') %>%
+  arrange(genres)
+
+data.frame(genres_overview) %>% arrange(desc(ratings)) %>% head(10)
+```
+` `  
+Based on these observations, a model is constructed, expanding on Model 3 and introducing the variable $b_g$.  This new variable accounts for genre effects while $\lambda$ is again used to reduce the impact of the outliers by genres with few reviews.  This equation is written as follows:\    
+` `  
+$Y_{i,u,g} = \mu + \lambda_{i,u,g} b_i + \lambda_{i,u,g} b_u + \lambda_{i,u,g} b_g + \epsilon_{i,ui,g}$\    
+` `   
+This model returns the following outputs when it is ran against the test data with the first result depicting the model without regularization (i.e. $\lambda$ = 0) and the second result depicting the model with regularization (i.e. $\lambda$ set to that of its best tuned value).\  
+` `  
+` `  
+` `  
+```{r Model 4 (mu+Movie+User+Genre), include=FALSE}
+
+model4 <- function(l, test_or_valid) {
+  
+  movie_avgs <- training %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n() + l), 
+              .groups = 'drop')
+  
+  user_avgs <- training %>%
+    left_join(movie_avgs, by='movieId') %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - mu - b_i)/(n() + l), 
+              .groups = 'drop')
+  
+  genre_avgs <- training %>%
+    left_join(movie_avgs, by='movieId') %>%
+    left_join(user_avgs, by='userId') %>%
+    group_by(genres) %>%
+    summarize(b_g = sum(rating - mu - b_i - b_u)/(n() + l), 
+              .groups = 'drop')
+  
+  predicted_rating <- test_or_valid %>%
+    left_join(movie_avgs, by='movieId') %>%
+    left_join(user_avgs, by='userId') %>%
+    left_join(genre_avgs, by='genres') %>%
+    mutate(pred=ifelse(!is.na(b_i + b_u + b_g), mu + b_i + b_u + b_g, mu)) %>%
+    .$pred
+  
+  Model_Rating(l, test_or_valid$rating, predicted_rating)
+}
+```
+```{r Model 4 Training / Testing, fontsize=10, echo=FALSE}
+
+lambda_untuned4 <- seq(0, 6, 0.25)  # Lambda Unknown/Not Tuned
+
+training_model4 <- sapply(lambda_untuned4, model4, test)
+
+lambda_tuned4 <- lambda_untuned4[which.min(training_model4[2,])]
+
+training_stats[6, 3:4] <- sapply(0, model4, test)
+training_stats[7, 3:4] <- sapply(lambda_tuned4, model4, test)
+training_stats[6:7,]
+```
+` `  
+Comparing Model 4's unregularized result with that of Model 3 shows that there is a further RMSE reduction of 0.00035.  Additionally, Model 4's regularized result reduces the outlier effects by an additional 0.00057.  Again, these results meet the project goal based solely on the test data; however, the final results are to be ran against the separate validation data and further analysis of the time effect is warranted.\   
+` `  
+**Model 5** ($\mu$ + Movie + User + Genre + Time Effects)\    
+` `  
+Model 5 adds the time effects to that of the $\mu$, movie effects, user effects, and genre effects that were described in Model 4.\     
+` `  
+This final model compensates for the change of time as described in four distinct groups: (1) Year of Release; (2) Year of Review; (3) Week of Review; and (4) Hour of Review.\    
+` `  
+*Year of Release*\    
+` `  
+The year of a movie's release is extracted from the movie title.  Movie releases cover a 94-year period that ranges from 1915 through 2008.  Within those years, a minimum number of reviews is 33 from movies released in 1917 and a maximum number of reviews is 787,116 for movies released in 1995.  Likewise, the minimum mean rating is 3.25 from movies released in 1915 and the maximum mean rating is 4.05 from movies released in 1946.  The mean rating by year of release is 3.7211, which is higher than the overall average mean of 3.5125.  Overall variability in this data is shown in the below figures:\    
+```{r Model 5 Initial Analysis - Timing of Release, fig.align='center', fig.width=7, fig.height=4,echo=FALSE}
+time_review_release_fig <- edx %>% 
+  mutate(yr_released = as.numeric(stri_sub(title,-5,-2))) %>%
+  group_by(yr_released) %>%
+  summarise(num_rvws = length(rating), .groups = 'drop') %>%
+  ggplot(aes(yr_released, num_rvws)) + 
+  geom_smooth(method = 'loess', formula = 'y ~ x') +
+  geom_point() +
+  ggtitle("Reviews by Release Year") +
+  xlab("Release Year") +
+  scale_y_continuous(name="Number of Reviews", labels = scales::comma)   
+
+time_rating_release_fig <- edx %>% 
+  mutate(yr_released = as.numeric(stri_sub(title,-5,-2))) %>%
+  group_by(yr_released) %>%
+  summarise(meanrating = mean(rating), .groups = 'drop') %>%
+  ggplot(aes(yr_released, meanrating)) + 
+  geom_smooth(method = 'loess', formula = 'y ~ x') +
+  geom_point() +
+  annotate("text", x = 1994, y = 3.75, label = "Mean = 3.7211") +
+  geom_hline(yintercept=3.7211, size=1.0, color="red") +
+  ggtitle("Ratings by Year") +
+  ggtitle("Ratings by Release Year") +
+  ylab("Average Rating") +
+  xlab("Release Year") 
+
+grid.arrange(time_review_release_fig,time_rating_release_fig, ncol=2) 
+```
+` `  
+` `  
+` `  
+*Year of Review*\    
+` `  
+The year that a movie is reviewed and rated is extracted from the timestamp parameter.  In the Movielens data, these reviews cover a 15 year period from 1995 through 2009.  From the data, variability is again noted with the minimum reviews submitted in 1995 with 2 reviews submitted and the maximum number of reviews occurring in the year 2000 with 114,4666 reviews.  Likewise, the minimum mean rating occurred in 1995 with rating of 3.0 and the maximum mean rating occurred in 1999 with a rating of 3.62.  The overall mean rating by year of review of 3.4737, which is lower than the overall mean average of 3.5125.  Overall variability in this data is shown in the below figures:\    
+```{r Model 5 Initial Analysis - Timing of Review (Year) Validation, fig.align='center', fig.width=7, fig.height=4,echo=FALSE}
+time_yr_reviews_fig <- edx %>% 
+  mutate(yr=year(as_datetime(timestamp))) %>%
+  group_by(yr) %>%
+  summarise(yr_review=mean(length(rating)), .groups = 'drop') %>%
+  ggplot(aes(yr, yr_review)) +
+  geom_smooth(method = 'loess', formula = 'y ~ x') +
+  geom_point() +
+  ggtitle("Yearly Reviews") +
+  xlab("Review Year") +
+  scale_y_continuous(name="Number of Reviews", labels = scales::comma)  
+
+time_yr_ratings_fig <- edx %>% 
+  mutate(yr=year(as_datetime(timestamp))) %>%
+  group_by(yr) %>%
+  summarise(yr_rating=mean(rating), .groups = 'drop') %>%
+  ggplot(aes(yr, yr_rating)) +
+  geom_smooth(method = 'loess', formula = 'y ~ x') +
+  geom_point() +
+  annotate("text", x = 1997.1, y = 3.45, label = "Mean = 3.4737") +
+  geom_hline(yintercept=3.4737, size=1.0, color="red") +
+  ggtitle("Ratings by Review Year") +
+  xlab("Review Year") +
+  ylab("Average Rating") 
+
+grid.arrange(time_yr_reviews_fig, time_yr_ratings_fig, ncol=2)
+```
+*Week of Review*\    
+` `   
+Also extracted from the timestamp is that of the week of the year that the review was submitted.  Both reviews and rating scores fluctuate throughout the year and seem to be cyclic in nature.  The minimum number of movie reviews were submitted in week 52 (i.e. the week of 21 December) with 54,829 reviews and the maximum number of reviews were submitted at week 46 (i.e. the week of 09 November) with 274,873 reviews.  Likewise, the minimum mean rating occurred in week 11 (i.e. the week of 15 March) with a rating score of 3.46 and the maximum mean rating occurred in week 39 (i.e. the week of 21 September) with a rating of 3.59.  The overall weekly mean rating was 3.515, which is slightly higher than the overall mean average of 3.5125.  Overall variability in this data is shown in the below figures:\    
+```{r Model 5 Initial Analysis - Timing of Review (Week), fig.align='center', fig.width=7, fig.height=4,echo=FALSE}
+time_wk_reviews_fig <- edx %>% 
+  mutate(wk=week(as_datetime(timestamp))-1) %>%
+  group_by(wk) %>%
+  summarise(wk_review=mean(length(rating)), .groups = 'drop') %>%
+  ggplot(aes(wk, wk_review)) +
+  geom_smooth(method = 'loess', formula = 'y ~ x') +
+  geom_point() +
+  ggtitle("Weekly Reviews") +
+  xlab("Review Week") +
+  scale_y_continuous(name="Number of Reviews", labels = scales::comma)  
+
+time_wk_ratings_fig <- edx %>% 
+  mutate(wk=week(as_datetime(timestamp))) %>%
+  group_by(wk) %>%
+  summarise(wk_rating=mean(rating), .groups = 'drop') %>%
+  ggplot(aes(wk, wk_rating)) +
+  geom_smooth(method = 'loess', formula = 'y ~ x') +
+  geom_point() +
+  annotate("text", x = 43, y = 3.510, label = "Mean = 3.515") +
+  geom_hline(yintercept=3.515, size=1.0, color="red") +
+  ggtitle("Ratings by Week Reviewed") +
+  xlab("Review Week") +
+  ylab("Average Rating") 
+
+grid.arrange(time_wk_reviews_fig,time_wk_ratings_fig, ncol=2) 
+```
+*Hour of Review*\    
+` `  
+The final value that was used to create a model is that of the hour of the day that reviews were submitted.  This can also be extracted from the timestamp; and like the weekly ratings seem to be cyclic in nature.  The minimum number of reviews were submitted at 09:00 with 210,888 reviews and the maximum number of reviews submitted at 20:00 with 470,225 reviews.  Likewise, the minimum mean rating occurred at 11:00 with a rating of 3.49 and the maximum rating occurred at 00:00 (i.e. midnight) with a rating of 3.53.  The hourly mean rating of 3.511 is lower than the overall mean rating of 3.5125. Overall variability in this data is shown in the below figures:\     
+```{r Model 5 Initial Analysis - Timing of Review (Hour), fig.align='center', fig.width=7, fig.height=4,echo=FALSE}
+time_hr_reviews_fig <- training %>% 
+  mutate(hr=hour(as_datetime(timestamp))) %>%
+  group_by(hr) %>%
+  summarise(hr_review=mean(length(rating)), .groups = 'drop') %>%
+  ggplot(aes(hr, hr_review)) +
+  geom_smooth(method = 'loess', formula = 'y ~ x') +
+  geom_point() +
+  ggtitle("Hourly Reivews") +
+  xlab("Review Hour") + 
+  scale_y_continuous(name="Number of Reviews", labels = scales::comma)  
+
+time_hr_ratings_fig <- training %>% 
+  mutate(hr=hour(as_datetime(timestamp))) %>%
+  group_by(hr) %>%
+  summarise(hr_rating=mean(rating), .groups = 'drop') %>%
+  ggplot(aes(hr, hr_rating)) +
+  geom_smooth(method = 'loess', formula = 'y ~ x') +
+  geom_point() +
+  annotate("text", x = 4, y = 3.5095, label = "Mean = 3.511") +
+  geom_hline(yintercept=3.511, size=1.0, color="red") +
+  ggtitle("Ratings by Hour Reviewed") +
+  xlab("Review Hour") +
+  ylab("Average Rating")  
+
+grid.arrange(time_hr_reviews_fig,time_hr_ratings_fig, ncol=2) 
+```
+Based on these observations, a model is constructed, expanding on Model 4 and introducing the variable $b_t$.  This new variable accounts for various time effects with $\lambda$ added to allow for regularization and reduce the impact on the RMSE value from years with few reviews.  This equation is written as:\    
+` `  
+$Y_{i,u,g,t} = \mu + \lambda_{i,u,g,t} b_i + \lambda_{i,u,g,t} b_u + \lambda_{i,u,g,t} b_g + \lambda_{i,u,g,t} b_t + \epsilon_{i,u,g,t}$\    
+` `   
+This model returns the following outputs when it is ran against the test data with the first result depicting the model without regularization (i.e. $\lambda$ = 0) and the second result depicting the model results with regularization (i.e. $\lambda$ set to that of its best tuned value).\  
+` `  
+` `  
+```{r Model 5 (mu+Movie+User+Genre+Time), include=FALSE}
+model5 <- function(l, test_or_valid) {
+  
+   movie_avgs <- training %>%
+    group_by(movieId) %>%
+    summarise(b_i = sum(rating - mu)/(n() + l), 
+        .groups = 'drop')
+  
+  user_avgs <- training %>%
+    left_join(movie_avgs, by='movieId') %>%
+    group_by(userId) %>%
+    summarise(b_u = sum(rating - mu - b_i)/(n() + l), 
+       .groups = 'drop')
+  
+  genre_avgs <- training %>%
+    left_join(movie_avgs, by='movieId') %>%
+    left_join(user_avgs, by='userId') %>%
+    group_by(genres) %>%
+    summarise(b_g = sum(rating - mu - b_i - b_u)/(n() + l), 
+       .groups = 'drop')
+  
+  time_yr_released_avgs <- training %>%
+    left_join(movie_avgs, by='movieId') %>%
+    left_join(user_avgs, by='userId') %>%
+    left_join(genre_avgs, by='genres') %>%
+    group_by(yr_released = as.numeric(stri_sub(title,-5,-2))) %>% 
+    summarise(b_t1 = sum(rating - mu - b_i - b_u - b_g)/(n() + l), 
+       .groups = 'drop')
+  
+  time_yr_reviewed_avgs <- training %>%
+    left_join(movie_avgs, by = 'movieId') %>%
+    left_join(user_avgs, by = 'userId') %>%
+    left_join(genre_avgs, by = 'genres') %>%
+    mutate(yr_released = as.numeric(stri_sub(title,-5,-2))) %>%
+    left_join(time_yr_released_avgs, by='yr_released') %>%
+    group_by(yr_reviewed=year(as_datetime(timestamp))) %>%
+    summarize(b_t2 = sum(rating - mu - b_i - b_u - b_g - b_t1)/(n() + l),
+             .groups = 'drop')
+  
+  time_wk_reviewed_avgs <- training %>%
+    left_join(movie_avgs, by = 'movieId') %>%
+    left_join(user_avgs, by = 'userId') %>%
+    left_join(genre_avgs, by = 'genres') %>%
+    mutate(yr_released = as.numeric(stri_sub(title,-5,-2))) %>%
+    left_join(time_yr_released_avgs, by='yr_released') %>%
+    mutate(yr_reviewed=year(as_datetime(timestamp))) %>%
+    left_join(time_yr_reviewed_avgs, by='yr_reviewed') %>% 
+    group_by(wk_reviewed=week(as_datetime(timestamp))) %>%
+    summarize(b_t3 = sum(rating - mu - b_i - b_u - b_g - b_t1 - b_t2)/(n() + l),
+            .groups = 'drop')
+
+  time_hr_reviewed_avgs <- training %>%
+    left_join(movie_avgs, by = 'movieId') %>%
+    left_join(user_avgs, by = 'userId') %>%
+    left_join(genre_avgs, by = 'genres') %>%
+    mutate(yr_released = as.numeric(stri_sub(title,-5,-2))) %>%
+    left_join(time_yr_released_avgs, by='yr_released') %>%
+    mutate(yr_reviewed=year(as_datetime(timestamp))) %>%
+    left_join(time_yr_reviewed_avgs, by='yr_reviewed') %>% 
+    mutate(wk_reviewed=week(as_datetime(timestamp))) %>%
+    left_join(time_wk_reviewed_avgs, by='wk_reviewed') %>%       
+    group_by(hr_reviewed=hour(as_datetime(timestamp))) %>%
+    summarize(b_t4 = sum(rating - mu - b_i - b_u - b_g - b_t1 - b_t2 - b_t3)/(n() + l),
+          .groups = 'drop')
+  
+  predicted_rating <- test_or_valid %>%
+    left_join(movie_avgs, by='movieId') %>%
+    left_join(user_avgs, by='userId') %>%
+    left_join(genre_avgs, by='genres') %>%
+    mutate(yr_released = as.numeric(stri_sub(title,-5,-2))) %>%
+    left_join(time_yr_released_avgs, by='yr_released') %>%
+    mutate(yr_reviewed=year(as_datetime(timestamp))) %>%
+    left_join(time_yr_reviewed_avgs, by='yr_reviewed') %>% 
+    mutate(wk_reviewed=week(as_datetime(timestamp))) %>%
+    left_join(time_wk_reviewed_avgs, by='wk_reviewed') %>% 
+    mutate(hr_reviewed=hour(as_datetime(timestamp))) %>%
+    left_join(time_hr_reviewed_avgs, by='hr_reviewed') %>% 
+    mutate(pred=ifelse(!is.na(b_i + b_u + b_g + b_t1 + b_t2 + b_t3 + b_t4), mu + b_i + b_u + b_g + b_t1 + b_t2 + b_t3 + b_t4, mu)) %>%
+    .$pred
+
+  Model_Rating(l, test_or_valid$rating, predicted_rating)
+} 
+```
+```{r Model 5 Training / Testing, fontsize=10, echo=FALSE}
+
+lambda_untuned5 <- seq(0, 6, 0.25)  # Lambda Unknown/Not Tuned
+
+training_model5 <- sapply(lambda_untuned5, model5, test)
+
+lambda_tuned5 <- lambda_untuned5[which.min(training_model5[2,])]
+
+training_stats[8,3:4] <- sapply(0, model5, test)
+training_stats[9,3:4] <- sapply(lambda_tuned5, model5, test)
+training_stats[8:9,]
+```
+` `  
+Comparing Model 5's unregularized result with that of Model 4 shows a further RMSE reduction of 0.00029.  Additionally, Model 5's regularized result reduces the outlier effects by an additional 0.00058.\   
+` `  
+` `  
+**RESULTS**\  
+` `  
+` `  
+As indicated previously in this report, using an independent data set allows evaluations of the various models' true performance, as training and validating the model from the same data results in over-fitting the model.  Utilizing a separate validation data set results in higher RMSE values than that of the results discussed previously from the training and tuning of the models.  These results have been separated into non-regularized (i.e. $\lambda$ = 0) and regularized ($\lambda$ is set to its best tuned value) models for ease of comparison.\ 
+` `   
+```{r Validation Results Overview, include=FALSE}
+validation_stats[1,3:4] <- Model_Rating(NA, validation$rating, mu) # Model 1
+validation_stats[2,3:4] <- sapply(0, model2, validation) # Model 2:  Non-Regularization Model
+validation_stats[3,3:4] <- sapply(lambda_tuned2, model2, validation) # Model 2: Regularization
+validation_stats[4,3:4] <- sapply(0, model3, validation) # Model 3:  Non-Regularization
+validation_stats[5,3:4] <- sapply(lambda_tuned3, model3, validation) # Model 3:  Regularization
+validation_stats[6,3:4] <- sapply(0, model4, validation) # Model 4:  Non-Regularization
+validation_stats[7,3:4] <- sapply(lambda_tuned4, model4, validation) #Model 4:  Regularization
+validation_stats[8,3:4] <- sapply(0, model5, validation) # Model 5:  Non-Regularization
+validation_stats[9,3:4] <- sapply(lambda_tuned5, model5, validation) # Model 5:  Regularization
+validation_stats
+```
+Models that did not use regularization failed to meet the project's objectives of reducing the RMSE to below 0.86490.\    
+` `   
+` `  
+` `  
+` `  
+```{r Non-Regularized Model Results, echo=FALSE}
+without_regularization <- validation_stats[c(1,2,4,6,8),]
+without_regularization
+```
+` `  
+However, once regularization is introduced with $\lambda$ tuned to their optimized values, each model showed improvement as the effects of the outliers are reduced.\     
+```{r Lambda Tuning Figures, fig.align='center',fig.width=7, fig.height=4, echo=FALSE}
+tuning_line2 <- data.frame(Model = "Model 2", Lambda = lambda_untuned2, RMSE = unlist(training_model2[2,])) %>% 
+  ggplot() +
+  geom_line(aes(Lambda, RMSE, color="blue"), show.legend=FALSE) +
+    ggtitle("Model 2 Lambda Tuning") +
+  xlab("Lambda") +
+  ylab("RMSE")  
+  
+tuning_line3 <- data.frame(Model = "Model 3", Lambda = lambda_untuned3, RMSE = unlist(training_model3[2,])) %>% 
+  ggplot() +
+  geom_line(aes(Lambda, RMSE, color="blue"), show.legend=FALSE) +
+    ggtitle("Model 3 Lambda Tuning") +
+  xlab("Lambda") +
+  ylab("RMSE")  
+
+tuning_line4 <- data.frame(Model = "Model 4", Lambda = lambda_untuned4, RMSE = unlist(training_model4[2,])) %>% 
+  ggplot() +
+  geom_line(aes(Lambda, RMSE, color="blue"), show.legend=FALSE) +
+    ggtitle("Model 4 Lambda Tuning") +
+  xlab("Lambda") +
+  ylab("RMSE")  
+
+tuning_line5 <- data.frame(Model = "Modle 5", Lambda = lambda_untuned5, RMSE = unlist(training_model5[2,])) %>% 
+  ggplot() +
+  geom_line(aes(Lambda, RMSE, color="blue"), show.legend=FALSE) +
+    ggtitle("Model 5 Lambda Tuning") +
+  xlab("Lambda") +
+  ylab("RMSE")  
+
+grid.arrange(tuning_line2, tuning_line3, tuning_line4, tuning_line5, ncol=2)
+```
+```{r Regularized Model Results, fontsize=10, echo=FALSE}
+with_regularization <- validation_stats[c(1, 3,5,7,9),]
+with_regularization 
+``` 
+` `  
+As the results indicate, the regularization result from Model 5 is the only model that met the project's objectives of achieving an RMSE value below that of 0.86490.\     
+` `  
+```{r Best Model Results, fontsize=10, echo=FALSE}
+validation_stats %>% arrange(RMSE) %>% head(1)
+```
+` `  
+` `  
+` `  
+` `  
+**CONCLUSION**\      
+` `  
+As seen in this project report, model accuracy is impacted by the proper selection of relevant and independent predictors as well as the presence of outliers.  While  outliers may be addressed through regularization, these models must first be tuned prior to validation; and a large $\lambda$ will result in overfitting of the models to the test data and selecting independent predictors is important.\    
+` `  
+Additional studies are warranted as reductions in RMSE may be possible from analysis on movies with multiple genres as well as movies that are prequels or sequals. Cross validation may also assist in reducing the RMSE value, as well as dimension reduction so that standard functions found within R (e.g. linear regression, logistics regression, loess regression, and random forest) may be utilized.\    
+` `  
+While the project focused on a data set from the movie industry, techniques used may easily be applied to other areas of focus as well, such as product ratings and restaurant ratings, which is used widely by industry to make financial decisions.\    
